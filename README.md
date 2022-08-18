@@ -1,1 +1,1 @@
-Some utilities useful for development 
+# Utilities useful during development

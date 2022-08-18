@@ -18,6 +18,7 @@ In case no such executable is passed, `cmake --build build` will be run.
 
 ### TODOS
 
-- [] Specify files to watch from command line
-- [] Get files to watch automatically from git
+- [] Specify files to watch from auxiliary config file.
+- [] Specify files to watch from command line.
+- [] Get files to watch automatically from git.
 
