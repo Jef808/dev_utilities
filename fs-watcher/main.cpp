@@ -34,10 +34,6 @@ int main(int argc, char *argv[]) {
     std::vector<std::string> filepaths{};
 
     load_json(argv[1], filepaths);
-    fmt::print("\n\nThe vector of strings:\n");
-    for (const auto& s : filepaths) {
-        fmt::print("\n{0}\n", s);
-    }
 
     size_t n_files = filepaths.size();
     const char* _filepaths[n_files];
@@ -46,18 +42,9 @@ int main(int argc, char *argv[]) {
         return fp.c_str();
     });
 
-    std::cout << "\n\nbefore add_watchers\n\n" << std::endl;
-
-    fmt::print("The _filepaths list:\n");
-    for (const auto* fp : _filepaths) {
-        fmt::print("{0}\n", fp);
-    }
-
     Watcher watcher{};
-
-    fmt::print("\ncalling add_watchers\n");
-
     watcher.start(n_files, _filepaths, command_s, IN_MODIFY);
 
-    return 0;
+
+    return EXIT_SUCCESS;
 }

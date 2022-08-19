@@ -9,10 +9,10 @@
 #include <unistd.h>
 #include <vector>
 
-#include <iostream>
 #include <algorithm>
 #include <cassert>
 #include <fmt/core.h>
+#include <iostream>
 #include <unordered_map>
 
 #include <boost/process/system.hpp>
@@ -21,36 +21,26 @@ Watcher::Watcher() : m_ifd{inotify_init()} {
   if (m_ifd < 0) {
     perror("inotify_init() = ");
   }
+  m_status = Initialized;
 }
 
-// void init()
-
 void Watcher::start(size_t n_files, const char *filepaths[],
-                    const char* process_s,
-                    unsigned int event_mask) {
+                    const char *process_s, unsigned int event_mask) {
+
+  if (m_status == Status::Uninitialized) {
+    throw std::runtime_error("Watcher::start: status is Uninitialized");
+  }
 
   EventsHandler events_handler;
   events_handler.set_process_s(process_s);
 
-  // if (m_status == Status::Uninitialized) {
-  //     perror("starting uninitialized");
-  //     return;
-  // }
   add_watchers(n_files, filepaths, event_mask);
 
   while (n_watchers > 0) {
     check_for_events_ready();
     get_ready_events();
-
-    fmt::print("\nList of events we read:\n");
-    for (const auto& e : m_events) {
-        fmt::print("{0}\n", e.name);
-    }
-    fmt::print("\n\n\nCalling events handler");
-
-    int res = events_handler(*this);
-    fmt::print("\nResult: {0}", res);
     fflush(stdout);
+    int res = events_handler(*this);
   }
 }
 
@@ -71,60 +61,51 @@ std::string_view eventmask_2_string(unsigned int mask) {
   }
 }
 
-int Watcher::extract_entry_event(char *buffer, size_t buf_len,
-                                 event_entry_t &event) {
+void Watcher::extract_entry_event(char *buffer, size_t buf_len,
+                                  event_entry_t &event) {
   inotify_event *pevent = reinterpret_cast<inotify_event *>(buffer);
-
   // Copy the watch descriptor
-  const int wd = event.wd = pevent->wd;
-  // Copy the event type
-  std::string_view event_type_s = eventmask_2_string(pevent->mask);
-  event_type_s.copy(&event.type[0], event_type_s.size());
-  // Copy the filepath
-  std::string_view name = m_wd2name[wd];
-  name.copy(&event.name[0], name.size());
-
-  // Compute the inotify_event object's size.
-  static const size_t event_size = offsetof(struct inotify_event, name);
-  size_t name_len =
-      std::distance(&pevent->name[0],
-                    std::find(&pevent->name[0], &pevent->name[NAME_MAX], '\0'));
-
-  return event_size + name_len;
+  event.wd = pevent->wd;
+  // Get the string representation of the event type
+  event.type = eventmask_2_string(pevent->mask);
+  // Get the filepath of the file associated to the watch descriptor
+  event.name = m_wd2name[event.wd];
 }
 
 void Watcher::add_watchers(size_t n_files, const char *filepaths[],
-                           unsigned int event_mask)
-{
-  for (size_t i = 0; i < n_files; ++i)
-  {
-    int wd = inotify_add_watch(m_ifd, filepaths[i], event_mask);
+                           unsigned int event_mask) {
+  size_t init_count = m_wd2name.size();
+
+  for (size_t i = 0; i < n_files; ++i) {
+    const char *fp = filepaths[i];
+
+    int wd = inotify_add_watch(m_ifd, fp, event_mask);
     if (wd < 0) {
-      perror(" ");
-      fmt::print("\nError when adding watcher for file {0}", filepaths[i]);
-      m_status = Status::Uninitialized;
+      perror("inotify_add_watch");
+      fmt::print("\nWARNING: Failed to add watcher for file {0} with mask {1}",
+                 filepaths[i], event_mask);
     }
 
-    auto [it, inserted] = m_wd2name.insert(std::make_pair(wd, std::string(filepaths[i])));
+    auto [it, inserted] =
+        m_wd2name.insert(std::make_pair(wd, std::string(filepaths[i])));
     if (inserted) {
-      fmt::print("\n\nAdded watcher for filepath {0} with event mask {1}\n",
-                 filepaths[i], EVENT_MASK);
       ++n_watchers;
+    } else if (m_wd2name.count(wd)) {
+      fmt::print("\nWARNING: Watch descriptor {0} for path {1} is already "
+                 "associated with path {2}\n",
+                 wd, filepaths[i], it->second);
     }
   }
-  size_t count = m_wd2name.size();
 
-  fmt::print("\n\nWatching {0} files:\n", count);
-
-  for (const auto &[wd, name] : m_wd2name) {
-    fmt::print("  {0}\n", name);
+  size_t n_added = m_wd2name.size() - init_count;
+  fmt::print("\n*************\nWatching {0} files:\n", n_watchers);
+  for (const auto& [wd, fp] : m_wd2name) {
+    fmt::print("  - {0}\n", fp);
   }
-  if (n_watchers > 0) {
-      m_status = Status::WatchersRegistered;
-  }
+  fmt::print("************\n");
 }
 
-bool Watcher::check_for_events_ready() const {
+void Watcher::check_for_events_ready() const {
   fd_set rfds;
   FD_ZERO(&rfds);
   FD_SET(m_ifd, &rfds);
@@ -133,84 +114,53 @@ bool Watcher::check_for_events_ready() const {
     perror("select() = ");
   }
   if (res > 0) {
-    return true;
+    m_status = EventsReadyToRead;
   }
-  return false;
 };
 
 void Watcher::get_ready_events() {
-  /// Read r events.
   std::array<char, BUF_LEN> buffer;
   buffer.fill('\0');
 
-  fmt::print("\n\nBefore read\n\n");
-
   int r = read(m_ifd, &buffer[0], BUF_LEN);
   if (r < 0) {
-    fmt::print("\n\n  Error while reading from inotify_fd\n");
+    fmt::print("\nERROR: while reading from inotify_fd\n");
     perror("read");
   }
 
-  fmt::print("\nJust read {0} bytes from ifd\n", r);
-
-  const size_t old_size = m_events.size();
   size_t size = 0;
   size_t count = 0;
 
-  auto &event = m_events.emplace_back();
+  // NOTE: Since we only watch regular files, the `name`
+  // field of of all inotify_event instances does not
+  // contribute and the events have constant size.
+  int _count = 0;
+  while (size < r) {
+    auto &event = m_events.emplace_back();
+    extract_entry_event(buffer.data(), BUF_LEN, event);
+    size += EVENT_SIZE;
+    ++_count;
 
-  extract_entry_event(buffer.data(), BUF_LEN, event);
-
-  // fmt::print("Read {0} characters into the buffer.\n", r);
-  // {
-  //     inotify_event& entry = m_events.emplace_back();
-  //     ++count;
-  //     std::string_view name_sv = get_filepath(entry);
-  //     std::string name;
-  //     name_sv.copy(name.data(), name_sv.size());
-  //     fmt::print("Event Type: {0}, Filepath: {1}\n", name);
-  // }
-
-  // Add an entry to our list for each event read.
-  for (size_t s = 0; s < r; s +=EVENT_SIZE)
-  {
-    event_entry_t& entry = m_events.emplace_back();
-    ++count;
-    //std::string_view name_sv = entry.name;
-    //std::string name;
-    //name_sv.copy(name.data(), name_sv.size());
-    fmt::print("Event Type: {0}, Filepath: {1}\n", entry.type, entry.name);
-    fmt::print("Size of event: {0}\n", EVENT_SIZE);
+    fmt::print("  New event... TYPE: {0}, FILE: {1}\n", event.type, event.name);
   }
-
-  fmt::print(
-      "\n\n\nRead {0} characters and extracted {1} events: filepathis {2}\n\n",
-      r, count, event.name);
 }
 
-void Watcher::clear_events() { m_events.clear(); }
-
-std::string_view Watcher::get_filepath(const inotify_event &event) const {
-  return "";
+std::string_view Watcher::get_filepath(const inotify_event &event) {
+  return m_wd2name[event.wd];
 }
 
-int EventsHandler::operator()(Watcher &watcher) {
+bool EventsHandler::operator()(Watcher &watcher) {
   namespace bp = boost::process;
-  static auto onModify = [&](const inotify_event &event) {
-    fmt::print("Event {0}: FILE {1} MODIFIED\n", count++,
-               watcher.get_filepath(event));
-  };
 
   m_events.clear();
   std::swap(m_events, watcher.m_events);
 
-  fmt::print("\n************\n  EventsHandler starting...\n************\n");
+  bool res = true;
 
-  std::for_each(m_events.begin(), m_events.end(), [](const auto &event) {
-    fmt::print("Event: {0}\n", event.name);
-  });
+  for (const auto &event : m_events) {
+    int result = bp::system(m_process_s);
+    res &= (result >= 0);
+  }
 
-  fmt::print("\nCalling process {0}\n", m_process_s);
-  int result = bp::system(m_process_s);
-  return result;
+  return res;
 }

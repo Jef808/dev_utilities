@@ -15,10 +15,11 @@ class Watcher;
 static constexpr auto NAME_MAX = 1024;
 /* Upper bound for the size of the event type names. */
 static constexpr auto EVENT_TYPE_MAX = 10;
+/* Structure to help representing events as strings. */
 struct event_entry_t {
   int wd;
-  char type[EVENT_TYPE_MAX];
-  char name[NAME_MAX];
+  std::string_view type;
+  std::string_view name;
 };
 
 class EventsHandler {
@@ -29,7 +30,7 @@ public:
   /**
    * Handle a sequence of file modification events.
    */
-  int operator()(Watcher &watcher);
+  bool operator()(Watcher &watcher);
 
   void set_process_s(const char *process) { m_process_s = process; }
 
@@ -44,7 +45,10 @@ private:
 class Watcher {
 
   /* Size of a inotify_event structure. */
-  static constexpr auto EVENT_SIZE = sizeof(struct inotify_event);
+  //static constexpr auto EVENT_SIZE = sizeof(struct inotify_event);
+  static const auto EVENT_SIZE = offsetof(struct inotify_event, name);
+  /* The size of the entry structures we store. */
+  static const auto EVENT_ENTRY_SIZE = sizeof(struct event_entry_t);
   /* Lower bound for the total size of an inotify_event instance. */
   static constexpr auto BUF_LEN = EVENT_SIZE + NAME_MAX + 1;
   /* We will only track file modification events. */
@@ -85,7 +89,7 @@ public:
    *
    * See the man pages for #pselect() and #fd_set.
    */
-  bool check_for_events_ready() const;
+  void check_for_events_ready() const;
 
   /**
    * Read from the inotify file descriptor and store
@@ -93,55 +97,37 @@ public:
    */
   void get_ready_events();
 
-  int extract_entry_event(char *buffer, size_t buf_len, event_entry_t &event);
-
-  template <typename OutputIter>
-  void dump_collected_events(OutputIter out_event) const;
-
-  /**
-   * Clear the #m_events events container.
-   */
-  void clear_events();
+  void extract_entry_event(char *buffer, size_t buf_len, event_entry_t &event);
 
   /**
    * Get the filepath associated to an event.
    */
-  std::string_view get_filepath(const inotify_event &event) const;
+  std::string_view get_filepath(const inotify_event &event);
 
-  void set_inactive(std::string_view fp);
-
-  // operator bool() const {
-  //     return m_status != Status::Uninitialized;
-  // }
+  //void set_inactive(std::string_view fp);
 
 private:
   enum Status {
     Uninitialized = 0,
     Initialized = 1,
     Running = 2,
-    WatchersRegistered = 4,
-    EventsReadyToRead = 8,
-    EventsReadyToProcess = 16
+    EventsReadyToRead = 4,
   };
 
   friend class EventsHandler;
 
-  /* Flag indicating the Watcher instance's status. */
-  // mutable int m_status{ Status::Uninitialized };
   /* inotify file descriptor */
   int m_ifd;
+  /* Enum flags to keep track of the watcher's status. */
+  mutable Status m_status{Status::Uninitialized};
   /* number of watchers currently working */
-  size_t n_watchers;
-  Status m_status{Status::Uninitialized};
+  size_t n_watchers{0};
+
   /* list of unprocessed events. */
   std::vector<event_entry_t> m_events;
   /* watch descriptor to filepath map */
   std::unordered_map<int, std::string> m_wd2name;
 };
 
-template <typename OutputIter>
-inline void Watcher::dump_collected_events(OutputIter out_event) const {
-  std::copy(m_events.begin(), m_events.end(), out_event);
-}
 
 #endif // FS_WATCHER_H_
