@@ -14,17 +14,15 @@ The filepaths must be relative to the root directory.
 Optionally, pass pass in the path to an executable that will be run each time one of the watched files is modified.
 In case no such executable is passed, `cmake --build build` will be run.
 
-- ./build/watch -d DIRECTORY -f FILES -c [BUILD SCRIPT]...
+- ./build/fs-watcher/fs_watcher INPUT_FILES.json EXECUTABLE_HANDLER_FILE
 
 ### TODOS
 
-- [] Specify files to watch from auxiliary config file.
-- [X] Specify files to watch from command line.
+- [X] Specify files to watch from auxiliary config file.
+- [] Specify files to watch from command line.
 - [] Get files to watch automatically from git.
 - [] Get files to watch from cmake script.
 
-Streamlined json file as input.
 
-#### Event Handler
 
 
